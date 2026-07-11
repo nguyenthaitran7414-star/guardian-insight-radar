@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+@theme {
+  --color-page-bg: var(--page-bg);
+  --color-main-surface: var(--main-surface);
+  --color-solid-surface: var(--solid-surface);
+  --color-primary-text: var(--primary-text);
+  --color-secondary-text: var(--secondary-text);
+  --color-border-color: var(--border-color);
+  --color-accent-color: var(--accent-color);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-hover: var(--accent-hover);
+}
+
+@layer base {
+  :root {
+    --page-bg: #F5F5F7;
+    --main-surface: rgba(255, 255, 255, 0.82);
+    --solid-surface: #FFFFFF;
+    --primary-text: #1D1D1F;
+    --secondary-text: #6E6E73;
+    --border-color: rgba(0, 0, 0, 0.08);
+    --accent-color: #FF6B00;
+    --accent-soft: rgba(255, 107, 0, 0.10);
+    --accent-hover: #E56000;
+  }
+
+  html.dark {
+    --page-bg: #0B0B0D;
+    --main-surface: rgba(28, 28, 30, 0.80);
+    --solid-surface: #1C1C1E;
+    --primary-text: #F5F5F7;
+    --secondary-text: #A1A1A6;
+    --border-color: rgba(255, 255, 255, 0.10);
+    --accent-color: #FF7A1A;
+    --accent-soft: rgba(255, 122, 26, 0.10);
+    --accent-hover: #E56E17;
+  }
+
+  body {
+    background-color: var(--page-bg);
+    color: var(--primary-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    overflow: hidden;
+  }
+}
+
+/* Apple-style premium surface utility classes */
+.apple-glass {
+  background: var(--main-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.02);
+}
+
+.dark .apple-glass {
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+}
+
+.apple-card {
+  background: var(--solid-surface);
+  border: 1px solid var(--border-color);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.apple-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.04);
+}
+
+.dark .apple-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+/* Animations and Transitions */
+.transition-apple {
+  transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-color);
+}
+
+/* Custom premium transitions */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translate(-50%, 20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slideUp {
+  animation: slideUp 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slideIn {
+  animation: slideIn 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
