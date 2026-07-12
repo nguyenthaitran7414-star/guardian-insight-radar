@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import { z } from 'zod';
+import { resolveAIConfig } from '../../../utils/apiKey';
+import { generateStructured } from '../../../utils/aiClient';
 
 // Định nghĩa regex ẩn thông tin nhạy cảm (PII)
 function maskPII(text: string): string {
@@ -32,26 +33,26 @@ const AnalyzeInputSchema = z.object({
   feedback: z.array(FeedbackItemSchema).min(1, { message: 'Feedback array cannot be empty' })
 });
 
-// Cấu hình định dạng JSON trả về cho Gemini SDK
+// JSON Schema chuẩn cho kết quả trả về (dùng chung cho Gemini & Anthropic)
 const responseSchema = {
-  type: SchemaType.OBJECT,
+  type: 'object',
   properties: {
     results: {
-      type: SchemaType.ARRAY,
+      type: 'array',
       items: {
-        type: SchemaType.OBJECT,
+        type: 'object',
         properties: {
-          id: { type: SchemaType.STRING },
-          sentiment: { type: SchemaType.STRING, format: 'enum', enum: ['positive', 'neutral', 'negative'] },
-          theme: { type: SchemaType.STRING },
-          intent: { type: SchemaType.STRING, format: 'enum', enum: ['Complaint', 'Inquiry', 'Praise', 'Suggestion'] },
-          journeyStage: { type: SchemaType.STRING, format: 'enum', enum: ['pre-purchase', 'purchase', 'post-purchase', 'delivery'] },
-          severity: { type: SchemaType.STRING, format: 'enum', enum: ['low', 'medium', 'high', 'critical'] },
-          painPoint: { type: SchemaType.STRING },
-          hiddenNeed: { type: SchemaType.STRING },
-          possibleRootCause: { type: SchemaType.STRING },
-          confidence: { type: SchemaType.NUMBER },
-          responsibleDepartment: { type: SchemaType.STRING }
+          id: { type: 'string' },
+          sentiment: { type: 'string', enum: ['positive', 'neutral', 'negative'] },
+          theme: { type: 'string' },
+          intent: { type: 'string', enum: ['Complaint', 'Inquiry', 'Praise', 'Suggestion'] },
+          journeyStage: { type: 'string', enum: ['pre-purchase', 'purchase', 'post-purchase', 'delivery'] },
+          severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+          painPoint: { type: 'string' },
+          hiddenNeed: { type: 'string' },
+          possibleRootCause: { type: 'string' },
+          confidence: { type: 'number' },
+          responsibleDepartment: { type: 'string' }
         },
         required: [
           'id',
@@ -74,17 +75,15 @@ const responseSchema = {
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Kiểm tra API Key phía máy chủ
-    const apiKey = process.env.GEMINI_API_KEY;
+    // 1. Xác định cấu hình AI (ưu tiên key người dùng nhập, sau đó tới .env.local)
+    const { provider, apiKey, model, baseUrl } = resolveAIConfig(req);
     if (!apiKey) {
-      return NextResponse.json({ error: 'Missing GEMINI_API_KEY environment variable' }, { status: 500 });
+      return NextResponse.json({ error: 'Chưa cấu hình API Key. Vui lòng nhập API Key trong phần Cấu hình 🔑, hoặc thêm vào .env.local' }, { status: 500 });
     }
-
-    const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
     // 2. Parse và validate request body
     const body = await req.json().catch(() => ({}));
-    
+
     // Kiểm tra rỗng
     if (!body || !body.feedback) {
       return NextResponse.json({ error: 'Missing feedback list in request body' }, { status: 400 });
@@ -97,32 +96,22 @@ export async function POST(req: NextRequest) {
 
     const validatedInput = AnalyzeInputSchema.safeParse(body);
     if (!validatedInput.success) {
-      return NextResponse.json({ 
-        error: 'Validation failed', 
-        details: validatedInput.error.issues.map(i => `${i.path.join('.')}: ${i.message}`) 
+      return NextResponse.json({
+        error: 'Validation failed',
+        details: validatedInput.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
       }, { status: 400 });
     }
 
     const feedbacks = validatedInput.data.feedback;
 
-    // 3. Khởi tạo Gemini Model
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: modelName,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: responseSchema as any
-      }
-    });
-
-    // 4. Chia nhỏ danh sách thành các Batch từ 20 đến 30 (chọn 25 làm chuẩn)
+    // 3. Chia nhỏ danh sách thành các Batch (chọn 25 làm chuẩn)
     const BATCH_SIZE = 25;
     const finalResults: any[] = [];
 
     // Hàm xử lý từng Batch kèm cơ chế thử lại tối đa 1 lần nếu lỗi
     async function processBatchWithRetry(batch: any[], attempt: number = 1): Promise<any[]> {
       try {
-        // Ẩn PII trước khi gửi đến Gemini
+        // Ẩn PII trước khi gửi đến AI
         const sanitizedBatch = batch.map(item => ({
           id: item.id,
           brand: item.brand,
@@ -149,12 +138,19 @@ Dữ liệu phản hồi cần phân tích:
 ${JSON.stringify(sanitizedBatch)}
 `;
 
-        const result = await model.generateContent(promptText);
-        const responseText = result.response.text();
-        const parsed = JSON.parse(responseText);
+        const parsed = await generateStructured({
+          provider,
+          apiKey: apiKey!,
+          model,
+          baseUrl,
+          prompt: promptText,
+          schema: responseSchema,
+          schemaName: 'phan_tich_phan_hoi',
+          maxTokens: 8192
+        });
 
         if (!parsed || !Array.isArray(parsed.results)) {
-          throw new Error('Invalid response format from Gemini');
+          throw new Error('Invalid response format from AI');
         }
 
         return parsed.results;
@@ -189,7 +185,7 @@ ${JSON.stringify(sanitizedBatch)}
       finalResults.push(...batchResults);
     }
 
-    // 5. Trả về kết quả tổng hợp
+    // 4. Trả về kết quả tổng hợp
     return NextResponse.json({ results: finalResults });
   } catch (error: any) {
     console.error('Global API error:', error);

@@ -1,17 +1,18 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { DataProvider, useData } from '../context/DataContext';
+import { DataProvider, useData, AI_KEY_STORAGE } from '../context/DataContext';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import './globals.css';
-import { 
-  DatabaseBackup, 
-  BarChart3, 
-  Radar, 
-  SearchCode, 
-  ArrowLeftRight, 
-  FileText, 
+import ApiKeyModal from '../components/ApiKeyModal';
+import {
+  DatabaseBackup,
+  BarChart3,
+  Radar,
+  SearchCode,
+  ArrowLeftRight,
+  FileText,
   ShieldAlert,
   Sun,
   Moon,
@@ -19,7 +20,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Info,
-  X
+  X,
+  KeyRound,
+  Bot
 } from 'lucide-react';
 
 function AppLayoutContent({ children }: { children: React.ReactNode }) {
@@ -29,6 +32,14 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
   const [isDark, setIsDark] = useState(true);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  // Đọc trạng thái đã cấu hình API Key hay chưa
+  const refreshApiKeyStatus = () => {
+    const key = localStorage.getItem(AI_KEY_STORAGE);
+    setHasApiKey(!!(key && key.trim()));
+  };
 
   // Khởi tạo theme từ localStorage
   useEffect(() => {
@@ -45,6 +56,8 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
     if (window.innerWidth < 1024) {
       setIsSidebarCollapsed(true);
     }
+
+    refreshApiKeyStatus();
   }, []);
 
   // Chuyển đổi theme
@@ -62,6 +75,7 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
 
   const menuItems = [
     { name: 'Nhập dữ liệu', path: '/import', icon: DatabaseBackup },
+    { name: 'Trợ lý AI', path: '/agent', icon: Bot },
     { name: 'Tổng quan', path: '/dashboard', icon: BarChart3 },
     { name: 'Radar Vấn đề', path: '/radar', icon: Radar },
     { name: 'Phân tích Root Cause', path: '/root-cause', icon: SearchCode },
@@ -195,6 +209,25 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center space-x-3">
+            {/* API Key Config Button */}
+            <button
+              onClick={() => setShowApiKeyModal(true)}
+              className="flex items-center space-x-1.5 pl-2 pr-2.5 py-2 rounded-xl hover:bg-border-color text-secondary-text hover:text-primary-text transition-apple"
+              title="Cấu hình AI API Key (Gemini / Claude)"
+            >
+              <span className="relative">
+                <KeyRound size={16} />
+                <span
+                  className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-main-surface ${
+                    hasApiKey ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}
+                ></span>
+              </span>
+              <span className="hidden sm:inline text-[10px] font-bold uppercase tracking-wider">
+                {hasApiKey ? 'AI Thật' : 'Dự phòng'}
+              </span>
+            </button>
+
             {/* Theme Toggle Button */}
             <button
               onClick={toggleTheme}
@@ -244,6 +277,13 @@ function AppLayoutContent({ children }: { children: React.ReactNode }) {
           })}
         </nav>
       </div>
+
+      {/* API Key Config Modal */}
+      <ApiKeyModal
+        open={showApiKeyModal}
+        onClose={() => setShowApiKeyModal(false)}
+        onSaved={refreshApiKeyStatus}
+      />
 
       {/* Help Modal */}
       {showHelpModal && (

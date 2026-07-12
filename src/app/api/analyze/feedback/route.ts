@@ -1,9 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { resolveAIConfig } from '../../../../utils/apiKey';
+import { generateStructured } from '../../../../utils/aiClient';
 
-// Khởi tạo GenAI nếu có API Key
-const apiKey = process.env.GEMINI_API_KEY;
-const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
+// JSON Schema chuẩn cho kết quả (dùng chung Gemini & Anthropic)
+const feedbackResponseSchema = {
+  type: 'object',
+  properties: {
+    analyses: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          sentiment: { type: 'string', enum: ['positive', 'neutral', 'negative'] },
+          sentimentScore: { type: 'number' },
+          theme: { type: 'string', enum: ['Product Quality', 'Shipping & Delivery', 'Customer Service', 'Pricing & Promotion', 'Packaging', 'App & Web Experience', 'Product Assortment'] },
+          intent: { type: 'string', enum: ['Complaint', 'Inquiry', 'Praise', 'Suggestion'] },
+          painPoints: { type: 'array', items: { type: 'string' } },
+          hiddenNeeds: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['id', 'sentiment', 'sentimentScore', 'theme', 'intent', 'painPoints', 'hiddenNeeds']
+      }
+    }
+  },
+  required: ['analyses']
+};
 
 // Hàm phân tích dự phòng (Rule-based Fallback) khi không có API Key hoặc gọi API lỗi
 function runFallbackAnalysis(reviewText: string): any {
@@ -87,87 +108,55 @@ function runFallbackAnalysis(reviewText: string): any {
 }
 
 export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  const feedbacks = body?.feedbacks;
+
+  if (!feedbacks || !Array.isArray(feedbacks)) {
+    return NextResponse.json({ error: 'Dữ liệu feedbacks không hợp lệ' }, { status: 400 });
+  }
+
+  // Xác định cấu hình AI (ưu tiên key người dùng nhập, sau đó tới .env.local)
+  const { provider, apiKey, model, baseUrl } = resolveAIConfig(req);
+
+  // Nếu không có API Key, sử dụng phân tích Heuristics dự phòng
+  if (!apiKey) {
+    console.warn('Chưa cấu hình API Key. Sử dụng Phân tích Dự phòng (Rule-based Heuristics).');
+    const analyses = feedbacks.map((item: any) => ({
+      id: item.id,
+      ...runFallbackAnalysis(item.reviewText)
+    }));
+    return NextResponse.json({ analyses });
+  }
+
   try {
-    const body = await req.json();
-    const { feedbacks } = body;
-
-    if (!feedbacks || !Array.isArray(feedbacks)) {
-      return NextResponse.json({ error: 'Dữ liệu feedbacks không hợp lệ' }, { status: 400 });
-    }
-
-    // Nếu không có API Key, sử dụng phân tích Heuristics dự phòng
-    if (!genAI) {
-      console.warn('GEMINI_API_KEY chưa được cấu hình. Sử dụng Phân tích Dự phòng (Rule-based Heuristics).');
-      const analyses = feedbacks.map(item => ({
-        id: item.id,
-        ...runFallbackAnalysis(item.reviewText)
-      }));
-      return NextResponse.json({ analyses });
-    }
-
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: SchemaType.OBJECT,
-          properties: {
-            analyses: {
-              type: SchemaType.ARRAY,
-              items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  id: { type: SchemaType.STRING },
-                  sentiment: { type: SchemaType.STRING, format: 'enum', enum: ['positive', 'neutral', 'negative'] },
-                  sentimentScore: { type: SchemaType.NUMBER },
-                  theme: { type: SchemaType.STRING, format: 'enum', enum: ['Product Quality', 'Shipping & Delivery', 'Customer Service', 'Pricing & Promotion', 'Packaging', 'App & Web Experience', 'Product Assortment'] },
-                  intent: { type: SchemaType.STRING, format: 'enum', enum: ['Complaint', 'Inquiry', 'Praise', 'Suggestion'] },
-                  painPoints: {
-                    type: SchemaType.ARRAY,
-                    items: { type: SchemaType.STRING }
-                  },
-                  hiddenNeeds: {
-                    type: SchemaType.ARRAY,
-                    items: { type: SchemaType.STRING }
-                  }
-                },
-                required: ['id', 'sentiment', 'sentimentScore', 'theme', 'intent', 'painPoints', 'hiddenNeeds']
-              }
-            }
-          },
-          required: ['analyses']
-        }
-      }
-    });
-
     const promptText = `
-Hãy đóng vai trò là một chuyên gia phân tích phản hồi khách hàng (Voice of Customer). 
+Hãy đóng vai trò là một chuyên gia phân tích phản hồi khách hàng (Voice of Customer).
 Phân tích danh sách các đánh giá của khách hàng sau đây và phân loại chúng thành các thuộc tính cảm xúc (sentiment), điểm số cảm xúc (sentimentScore từ -1.0 đến 1.0), chủ đề (theme), ý định (intent), các điểm đau (painPoints) và nhu cầu ẩn giấu (hiddenNeeds).
 Mọi kết quả phải dịch/viết bằng tiếng Việt tự nhiên cho các mô tả (trừ mã enum tiếng Anh).
 
 Dữ liệu đầu vào:
-${JSON.stringify(feedbacks.map(f => ({ id: f.id, reviewText: f.reviewText })))}
+${JSON.stringify(feedbacks.map((f: any) => ({ id: f.id, reviewText: f.reviewText })))}
 `;
 
-    const result = await model.generateContent(promptText);
-    const responseText = result.response.text();
-    const parsedData = JSON.parse(responseText);
+    const parsedData = await generateStructured({
+      provider,
+      apiKey,
+      model,
+      baseUrl,
+      prompt: promptText,
+      schema: feedbackResponseSchema,
+      schemaName: 'phan_tich_danh_gia'
+    });
 
     return NextResponse.json(parsedData);
   } catch (error) {
-    console.error('Lỗi khi gọi Gemini API:', error);
-    
+    console.error('Lỗi khi gọi AI API:', error);
+
     // Nếu API gọi lỗi giữa chừng, sử dụng fallback để đảm bảo ứng dụng không sập
-    try {
-      const body = await req.json().catch(() => ({ feedbacks: [] }));
-      const feedbacks = body.feedbacks || [];
-      const analyses = feedbacks.map((item: any) => ({
-        id: item.id,
-        ...runFallbackAnalysis(item.reviewText)
-      }));
-      return NextResponse.json({ analyses, warning: 'Lỗi API. Kết quả được mô phỏng.' });
-    } catch (e) {
-      return NextResponse.json({ error: 'Lỗi phân tích hệ thống', details: String(error) }, { status: 500 });
-    }
+    const analyses = feedbacks.map((item: any) => ({
+      id: item.id,
+      ...runFallbackAnalysis(item.reviewText)
+    }));
+    return NextResponse.json({ analyses, warning: 'Lỗi API. Kết quả được mô phỏng.' });
   }
 }

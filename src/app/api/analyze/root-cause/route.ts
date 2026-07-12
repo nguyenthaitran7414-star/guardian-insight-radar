@@ -1,8 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { resolveAIConfig } from '../../../../utils/apiKey';
+import { generateStructured } from '../../../../utils/aiClient';
 
-const apiKey = process.env.GEMINI_API_KEY;
-const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
+// JSON Schema chuẩn cho kết quả RCA (dùng chung Gemini & Anthropic)
+const rcaResponseSchema = {
+  type: 'object',
+  properties: {
+    issueName: { type: 'string' },
+    detectedRootCause: { type: 'string' },
+    explanation: { type: 'string' },
+    evidenceQuotes: { type: 'array', items: { type: 'string' } },
+    recommendedActions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          action: { type: 'string' },
+          department: { type: 'string', enum: ['E-commerce', 'Marketing', 'Commercial', 'Customer Service'] }
+        },
+        required: ['action', 'department']
+      }
+    }
+  },
+  required: ['issueName', 'detectedRootCause', 'explanation', 'evidenceQuotes', 'recommendedActions']
+};
 
 // Hàm phân tích Root Cause mô phỏng để fallback
 function getFallbackRCA(issueName: string, reviews: { reviewText: string }[]): any {
@@ -48,54 +69,26 @@ function getFallbackRCA(issueName: string, reviews: { reviewText: string }[]): a
 }
 
 export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => ({}));
+  const { issueName, feedbacks } = body || {};
+
+  if (!issueName || !feedbacks || !Array.isArray(feedbacks)) {
+    return NextResponse.json({ error: 'Thiếu thông số issueName hoặc feedbacks' }, { status: 400 });
+  }
+
+  // Xác định cấu hình AI (ưu tiên key người dùng nhập, sau đó tới .env.local)
+  const { provider, apiKey, model, baseUrl } = resolveAIConfig(req);
+
+  if (!apiKey) {
+    console.warn('Chưa cấu hình API Key. Sử dụng RCA Fallback.');
+    return NextResponse.json(getFallbackRCA(issueName, feedbacks));
+  }
+
   try {
-    const body = await req.json();
-    const { issueName, feedbacks } = body;
-
-    if (!issueName || !feedbacks || !Array.isArray(feedbacks)) {
-      return NextResponse.json({ error: 'Thiếu thông số issueName hoặc feedbacks' }, { status: 400 });
-    }
-
-    if (!genAI) {
-      console.warn('GEMINI_API_KEY chưa được cấu hình. Sử dụng RCA Fallback.');
-      return NextResponse.json(getFallbackRCA(issueName, feedbacks));
-    }
-
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: SchemaType.OBJECT,
-          properties: {
-            issueName: { type: SchemaType.STRING },
-            detectedRootCause: { type: SchemaType.STRING },
-            explanation: { type: SchemaType.STRING },
-            evidenceQuotes: {
-              type: SchemaType.ARRAY,
-              items: { type: SchemaType.STRING }
-            },
-            recommendedActions: {
-              type: SchemaType.ARRAY,
-              items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  action: { type: SchemaType.STRING },
-                  department: { type: SchemaType.STRING, format: 'enum', enum: ['E-commerce', 'Marketing', 'Commercial', 'Customer Service'] }
-                },
-                required: ['action', 'department']
-              }
-            }
-          },
-          required: ['issueName', 'detectedRootCause', 'explanation', 'evidenceQuotes', 'recommendedActions']
-        }
-      }
-    });
-
     const promptText = `
 Bạn là một chuyên gia quản lý chất lượng và phân tích chuỗi cung ứng ngành bán lẻ.
 Dựa trên thông tin sự cố tiêu cực: "${issueName}", và các trích dẫn đánh giá của khách hàng sau:
-${JSON.stringify(feedbacks.map(f => f.reviewText))}
+${JSON.stringify(feedbacks.map((f: any) => f.reviewText))}
 
 Hãy thực hiện phân tích nguyên nhân gốc rễ (Root Cause Analysis - RCA) sử dụng phương pháp 5 Whys.
 1. Giải thích chi tiết cơ chế sự cố xảy ra bằng tiếng Việt.
@@ -103,18 +96,19 @@ Hãy thực hiện phân tích nguyên nhân gốc rễ (Root Cause Analysis - R
 3. Đề xuất 1-2 hành động khắc phục cụ thể và gán cho phòng ban chịu trách nhiệm tương ứng trong: E-commerce, Marketing, Commercial, Customer Service.
 `;
 
-    const result = await model.generateContent(promptText);
-    const responseText = result.response.text();
-    const parsedData = JSON.parse(responseText);
+    const parsedData = await generateStructured({
+      provider,
+      apiKey,
+      model,
+      baseUrl,
+      prompt: promptText,
+      schema: rcaResponseSchema,
+      schemaName: 'phan_tich_root_cause'
+    });
 
     return NextResponse.json(parsedData);
   } catch (error) {
     console.error('Lỗi gọi RCA API:', error);
-    try {
-      const body = await req.json().catch(() => ({}));
-      return NextResponse.json(getFallbackRCA(body.issueName || 'Sự cố chung', body.feedbacks || []));
-    } catch (e) {
-      return NextResponse.json({ error: 'Lỗi hệ thống', details: String(error) }, { status: 500 });
-    }
+    return NextResponse.json(getFallbackRCA(issueName, feedbacks));
   }
 }

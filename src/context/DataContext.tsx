@@ -19,9 +19,32 @@ interface DataContextType {
   runBatchAIAnalysis: () => Promise<void>;
   runSingleRCA: (issueName: string, selectedFeedbacks: CustomerFeedback[]) => Promise<any>;
   generateExecutiveBrief: () => Promise<any>;
+  askAgent: (messages: { role: 'user' | 'assistant'; content: string }[]) => Promise<any>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
+
+// Tên khóa lưu cấu hình AI trong LocalStorage
+export const AI_KEY_STORAGE = 'guardian_ai_key';
+export const AI_MODEL_STORAGE = 'guardian_ai_model';
+export const AI_PROVIDER_STORAGE = 'guardian_ai_provider';
+export const AI_BASE_URL_STORAGE = 'guardian_ai_base_url';
+
+// Dựng headers cho các request phân tích, tự động kèm cấu hình AI người dùng đã nhập (nếu có)
+function buildApiHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (typeof window !== 'undefined') {
+    const key = localStorage.getItem(AI_KEY_STORAGE);
+    const model = localStorage.getItem(AI_MODEL_STORAGE);
+    const provider = localStorage.getItem(AI_PROVIDER_STORAGE);
+    const baseUrl = localStorage.getItem(AI_BASE_URL_STORAGE);
+    if (key && key.trim()) headers['x-ai-key'] = key.trim();
+    if (model && model.trim()) headers['x-ai-model'] = model.trim();
+    if (provider && provider.trim()) headers['x-ai-provider'] = provider.trim();
+    if (baseUrl && baseUrl.trim()) headers['x-ai-base-url'] = baseUrl.trim();
+  }
+  return headers;
+}
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [feedbacks, setFeedbacks] = useState<CustomerFeedback[]>([]);
@@ -134,7 +157,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch('/api/analyze/feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildApiHeaders(),
         body: JSON.stringify({ feedbacks: [newFeedback] })
       });
 
@@ -213,7 +236,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const res = await fetch('/api/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildApiHeaders(),
         body: JSON.stringify(normalizedPayload)
       });
 
@@ -287,7 +310,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch('/api/analyze/root-cause', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildApiHeaders(),
         body: JSON.stringify({
           issueName,
           feedbacks: selectedFeedbacks.map(f => ({ reviewText: f.reviewText }))
@@ -330,7 +353,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch('/api/analyze/executive-brief', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildApiHeaders(),
         body: JSON.stringify(payload)
       });
 
@@ -340,6 +363,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Lỗi sinh báo cáo:', e);
       throw e;
     }
+  };
+
+  // Gửi câu hỏi tới Agent AI hội thoại (kèm toàn bộ dữ liệu để agent tự điều tra)
+  const askAgent = async (messages: { role: 'user' | 'assistant'; content: string }[]) => {
+    const res = await fetch('/api/agent', {
+      method: 'POST',
+      headers: buildApiHeaders(),
+      body: JSON.stringify({ messages, feedbacks })
+    });
+    return res.json();
   };
 
   return (
@@ -355,7 +388,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearData,
       runBatchAIAnalysis,
       runSingleRCA,
-      generateExecutiveBrief
+      generateExecutiveBrief,
+      askAgent
     }}>
       {children}
     </DataContext.Provider>
